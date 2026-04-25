@@ -1,0 +1,14 @@
+numpy<2
+pandas>=2.0
+torch>=2.3,<2.4
+torchdata==0.7.1
+torchtext==0.18.0
+spacy>=3.7
+altair>=5.0
+jupytext>=1.16
+GPUtil
+wandb
+
+# Dev tooling (optional)
+flake8
+black
