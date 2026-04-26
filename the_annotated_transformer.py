@@ -167,36 +167,6 @@ def subsequent_mask(size):
     )
     return subsequent_mask == 0
 
-def example_mask():
-    LS_data = pd.concat(
-        [
-            pd.DataFrame(
-                {
-                    "Subsequent Mask": subsequent_mask(20)[0][x, y].flatten(),
-                    "Window": y,
-                    "Masking": x,
-                }
-            )
-            for y in range(20)
-            for x in range(20)
-        ]
-    )
-
-    return (
-        alt.Chart(LS_data)
-        .mark_rect()
-        .properties(height=250, width=250)
-        .encode(
-            alt.X("Window:O"),
-            alt.Y("Masking:O"),
-            alt.Color("Subsequent Mask:Q", scale=alt.Scale(scheme="viridis")),
-        )
-        .interactive()
-    )
-
-example_mask().save("mask.html")
-
-show_example(example_mask)
 
 def attention(query, key, value, mask=None, dropout=None):
     d_k = query.size(-1)
@@ -282,32 +252,6 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:, : x.size(1)].requires_grad_(False)
         return self.dropout(x)
 
-def example_positional():
-    pe = PositionalEncoding(20, 0)
-    y = pe.forward(torch.zeros(1, 100, 20))
-
-    data = pd.concat(
-        [
-            pd.DataFrame(
-                {
-                    "embedding": y[0, :, dim],
-                    "dimension": dim,
-                    "position": list(range(100)),
-                }
-            )
-            for dim in [4, 5, 6, 7]
-        ]
-    )
-
-    return (
-        alt.Chart(data)
-        .mark_line()
-        .properties(width=800)
-        .encode(x="position", y="embedding", color="dimension:N")
-        .interactive()
-    )
-
-show_example(example_positional)
 
 def make_model(
     src_vocab, tgt_vocab, N=6, d_model=512, d_ff=2048, h=8, dropout=0.1
@@ -329,33 +273,7 @@ def make_model(
             nn.init.xavier_uniform_(p)
     return model
 
-def inference_test():
-    test_model = make_model(11, 11, 2)
-    test_model.eval()
-    src = torch.LongTensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
-    src_mask = torch.ones(1, 1, 10)
 
-    memory = test_model.encode(src, src_mask)
-    ys = torch.zeros(1, 1).type_as(src)
-
-    for i in range(9):
-        out = test_model.decode(
-            memory, src_mask, ys, subsequent_mask(ys.size(1)).type_as(src.data)
-        )
-        prob = test_model.generator(out[:, -1])
-        _, next_word = torch.max(prob, dim=1)
-        next_word = next_word.data[0]
-        ys = torch.cat(
-            [ys, torch.empty(1, 1).type_as(src.data).fill_(next_word)], dim=1
-        )
-
-    print("Example Untrained Model Prediction:", ys)
-
-def run_tests():
-    for _ in range(10):
-        inference_test()
-
-show_example(run_tests)
 
 class Batch:
 
