@@ -7,12 +7,10 @@ import math
 import copy
 import time
 from torch.optim.lr_scheduler import LambdaLR
-import pandas as pd
-import altair as alt
 import torchtext
 
 torchtext.disable_torchtext_deprecation_warning()
-from torchtext.data.functional import to_map_style_dataset
+
 from torch.utils.data import DataLoader
 from torchtext.vocab import build_vocab_from_iterator
 import torchtext.datasets as datasets
@@ -25,18 +23,6 @@ import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 warnings.filterwarnings("ignore")
-RUN_EXAMPLES = False
-
-def is_interactive_notebook():
-    return __name__ == "__main__"
-
-def show_example(fn, args=[]):
-    if __name__ == "__main__" and RUN_EXAMPLES:
-        return fn(*args)
-
-def execute_example(fn, args=[]):
-    if __name__ == "__main__" and RUN_EXAMPLES:
-        fn(*args)
 
 class DummyOptimizer(torch.optim.Optimizer):
     def __init__(self):
@@ -301,6 +287,15 @@ class TrainState:
     samples: int = 0
     tokens: int = 0
 
+def rate(step, model_size, factor, warmup):
+    """Transformer 论文中的学习率调度公式."""
+    if step == 0:
+        step = 1
+    return factor * (
+        model_size ** (-0.5) * min(step ** (-0.5), step * warmup ** (-1.5))
+    )
+
+
 def run_epoch(
     data_iter,
     model,
@@ -353,67 +348,6 @@ def run_epoch(
         del loss_node
     return total_loss / total_tokens, train_state
 
-def rate(step, model_size, factor, warmup):
-    if step == 0:
-        step = 1
-    return factor * (
-        model_size ** (-0.5) * min(step ** (-0.5), step * warmup ** (-1.5))
-    )
-
-def example_learning_schedule():
-    opts = [
-        [512, 1, 4000],
-        [512, 1, 8000],
-        [256, 1, 4000],
-    ]
-
-    dummy_model = torch.nn.Linear(1, 1)
-    learning_rates = []
-
-    for idx, example in enumerate(opts):
-
-        optimizer = torch.optim.Adam(
-            dummy_model.parameters(), lr=1, betas=(0.9, 0.98), eps=1e-9
-        )
-        lr_scheduler = LambdaLR(
-            optimizer=optimizer, lr_lambda=lambda step: rate(step, *example)
-        )
-        tmp = []
-
-        for step in range(20000):
-            tmp.append(optimizer.param_groups[0]["lr"])
-            optimizer.step()
-            lr_scheduler.step()
-        learning_rates.append(tmp)
-
-    learning_rates = torch.tensor(learning_rates)
-
-    alt.data_transformers.disable_max_rows()
-
-    opts_data = pd.concat(
-        [
-            pd.DataFrame(
-                {
-                    "Learning Rate": learning_rates[warmup_idx, :],
-                    "model_size:warmup": ["512:4000", "512:8000", "256:4000"][
-                        warmup_idx
-                    ],
-                    "step": range(20000),
-                }
-            )
-            for warmup_idx in [0, 1, 2]
-        ]
-    )
-
-    return (
-        alt.Chart(opts_data)
-        .mark_line()
-        .properties(width=600)
-        .encode(x="step", y="Learning Rate", color="model_size:warmup:N")
-        .interactive()
-    )
-
-example_learning_schedule()
 
 class LabelSmoothing(nn.Module):
 
@@ -437,75 +371,6 @@ class LabelSmoothing(nn.Module):
             true_dist.index_fill_(0, mask.squeeze(), 0.0)
         self.true_dist = true_dist
         return self.criterion(x, true_dist.clone().detach())
-
-def example_label_smoothing():
-    crit = LabelSmoothing(5, 0, 0.4)
-    predict = torch.FloatTensor(
-        [
-            [0, 0.2, 0.7, 0.1, 0],
-            [0, 0.2, 0.7, 0.1, 0],
-            [0, 0.2, 0.7, 0.1, 0],
-            [0, 0.2, 0.7, 0.1, 0],
-            [0, 0.2, 0.7, 0.1, 0],
-        ]
-    )
-    crit(x=predict.log(), target=torch.LongTensor([2, 1, 0, 3, 3]))
-    LS_data = pd.concat(
-        [
-            pd.DataFrame(
-                {
-                    "target distribution": crit.true_dist[x, y].flatten(),
-                    "columns": y,
-                    "rows": x,
-                }
-            )
-            for y in range(5)
-            for x in range(5)
-        ]
-    )
-
-    return (
-        alt.Chart(LS_data)
-        .mark_rect(color="Blue", opacity=1)
-        .properties(height=200, width=200)
-        .encode(
-            alt.X("columns:O", title=None),
-            alt.Y("rows:O", title=None),
-            alt.Color(
-                "target distribution:Q", scale=alt.Scale(scheme="viridis")
-            ),
-        )
-        .interactive()
-    )
-
-show_example(example_label_smoothing)
-
-def loss(x, crit):
-    d = x + 3 * 1
-    predict = torch.FloatTensor([[0, x / d, 1 / d, 1 / d, 1 / d]])
-    return crit(predict.log(), torch.LongTensor([1])).data
-
-def penalization_visualization():
-    crit = LabelSmoothing(5, 0, 0.1)
-    loss_data = pd.DataFrame(
-        {
-            "Loss": [loss(x, crit) for x in range(1, 100)],
-            "Steps": list(range(99)),
-        }
-    ).astype("float")
-
-    return (
-        alt.Chart(loss_data)
-        .mark_line()
-        .properties(width=350)
-        .encode(
-            x="Steps",
-            y="Loss",
-        )
-        .interactive()
-    )
-
-show_example(penalization_visualization)
 
 def data_gen(V, batch_size, nbatches):
     for i in range(nbatches):
@@ -546,48 +411,6 @@ def greedy_decode(model, src, src_mask, max_len, start_symbol):
         )
     return ys
 
-def example_simple_model():
-    V = 11
-    criterion = LabelSmoothing(size=V, padding_idx=0, smoothing=0.0)
-    model = make_model(V, V, N=2)
-
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=0.5, betas=(0.9, 0.98), eps=1e-9
-    )
-    lr_scheduler = LambdaLR(
-        optimizer=optimizer,
-        lr_lambda=lambda step: rate(
-            step, model_size=model.src_embed[0].d_model, factor=1.0, warmup=400
-        ),
-    )
-
-    batch_size = 80
-    for epoch in range(20):
-        model.train()
-        run_epoch(
-            data_gen(V, batch_size, 20),
-            model,
-            SimpleLossCompute(model.generator, criterion),
-            optimizer,
-            lr_scheduler,
-            mode="train",
-        )
-        model.eval()
-        run_epoch(
-            data_gen(V, batch_size, 5),
-            model,
-            SimpleLossCompute(model.generator, criterion),
-            DummyOptimizer(),
-            DummyScheduler(),
-            mode="eval",
-        )[0]
-
-    model.eval()
-    src = torch.LongTensor([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]])
-    max_len = src.shape[1]
-    src_mask = torch.ones(1, 1, max_len)
-    print(greedy_decode(model, src, src_mask, max_len=max_len, start_symbol=0))
-
 def load_tokenizers():
 
     try:
@@ -611,6 +434,21 @@ def yield_tokens(data_iter, tokenizer, index):
     for from_to_tuple in data_iter:
         yield tokenizer(from_to_tuple[index])
 
+def load_multi30k_raw():
+    """直接读取本地缓存的 Multi30k 文本文件（Windows 回退方案）."""
+    import os
+    cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "torch", "text", "datasets", "Multi30k")
+
+    def _read_lines(filename):
+        path = os.path.join(cache_dir, filename)
+        with open(path, "r", encoding="utf-8") as f:
+            return [line.strip() for line in f]
+
+    train = list(zip(_read_lines("train.de"), _read_lines("train.en")))
+    val   = list(zip(_read_lines("val.de"),   _read_lines("val.en")))
+    return train, val
+
+
 def build_vocabulary(spacy_de, spacy_en):
     def tokenize_de(text):
         return tokenize(text, spacy_de)
@@ -619,17 +457,23 @@ def build_vocabulary(spacy_de, spacy_en):
         return tokenize(text, spacy_en)
 
     print("Building German Vocabulary ...")
-    train, val, test = datasets.Multi30k(language_pair=("de", "en"))
+    try:
+        train, val, test = datasets.Multi30k(language_pair=("de", "en"))
+        data = list(train) + list(val) + list(test)
+    except Exception as e:
+        print(f"torchtext download failed ({e}), falling back to local cache...")
+        train, val = load_multi30k_raw()
+        data = train + val
+
     vocab_src = build_vocab_from_iterator(
-        yield_tokens(train + val + test, tokenize_de, index=0),
+        yield_tokens(data, tokenize_de, index=0),
         min_freq=2,
         specials=["<s>", "</s>", "<blank>", "<unk>"],
     )
 
     print("Building English Vocabulary ...")
-    train, val, test = datasets.Multi30k(language_pair=("de", "en"))
     vocab_tgt = build_vocab_from_iterator(
-        yield_tokens(train + val + test, tokenize_en, index=1),
+        yield_tokens(data, tokenize_en, index=1),
         min_freq=2,
         specials=["<s>", "</s>", "<blank>", "<unk>"],
     )
@@ -649,11 +493,6 @@ def load_vocab(spacy_de, spacy_en):
     print(len(vocab_src))
     print(len(vocab_tgt))
     return vocab_src, vocab_tgt
-
-if is_interactive_notebook() and RUN_EXAMPLES:
-
-    spacy_de, spacy_en = show_example(load_tokenizers)
-    vocab_src, vocab_tgt = show_example(load_vocab, args=[spacy_de, spacy_en])
 
 def collate_batch(
     batch,
@@ -745,30 +584,30 @@ def create_dataloaders(
             pad_id=vocab_src.get_stoi()["<blank>"],
         )
 
-    train_iter, valid_iter, test_iter = datasets.Multi30k(
-        language_pair=("de", "en")
-    )
+    try:
+        train_iter, valid_iter, _ = datasets.Multi30k(language_pair=("de", "en"))
+        train_iter = list(train_iter)
+        valid_iter = list(valid_iter)
+    except Exception as e:
+        print(f"torchtext download failed ({e}), falling back to local cache...")
+        train_iter, valid_iter = load_multi30k_raw()
 
-    train_iter_map = to_map_style_dataset(
-        train_iter
-    )
     train_sampler = (
-        DistributedSampler(train_iter_map) if is_distributed else None
+        DistributedSampler(train_iter) if is_distributed else None
     )
-    valid_iter_map = to_map_style_dataset(valid_iter)
     valid_sampler = (
-        DistributedSampler(valid_iter_map) if is_distributed else None
+        DistributedSampler(valid_iter) if is_distributed else None
     )
 
     train_dataloader = DataLoader(
-        train_iter_map,
+        train_iter,
         batch_size=batch_size,
         shuffle=(train_sampler is None),
         sampler=train_sampler,
         collate_fn=collate_fn,
     )
     valid_dataloader = DataLoader(
-        valid_iter_map,
+        valid_iter,
         batch_size=batch_size,
         shuffle=(valid_sampler is None),
         sampler=valid_sampler,
@@ -786,30 +625,39 @@ def train_worker(
     config,
     is_distributed=False,
 ):
-    print(f"Train worker process using GPU: {gpu} for training", flush=True)
-    torch.cuda.set_device(gpu)
+    has_cuda = torch.cuda.is_available()
+    device = torch.device(f"cuda:{gpu}" if has_cuda else "cpu")
+    print(f"Train worker process using {device} for training", flush=True)
+    if has_cuda:
+        torch.cuda.set_device(gpu)
 
     pad_idx = vocab_tgt["<blank>"]
     d_model = 512
     model = make_model(len(vocab_src), len(vocab_tgt), N=6)
-    model.cuda(gpu)
+    if has_cuda:
+        model.cuda(gpu)
     module = model
     is_main_process = True
     if is_distributed:
+        backend = "nccl" if has_cuda else "gloo"
         dist.init_process_group(
-            "nccl", init_method="env://", rank=gpu, world_size=ngpus_per_node
+            backend, init_method="env://", rank=gpu, world_size=ngpus_per_node
         )
-        model = DDP(model, device_ids=[gpu])
+        if has_cuda:
+            model = DDP(model, device_ids=[gpu])
+        else:
+            model = DDP(model)
         module = model.module
         is_main_process = gpu == 0
 
     criterion = LabelSmoothing(
         size=len(vocab_tgt), padding_idx=pad_idx, smoothing=0.1
     )
-    criterion.cuda(gpu)
+    if has_cuda:
+        criterion.cuda(gpu)
 
     train_dataloader, valid_dataloader = create_dataloaders(
-        gpu,
+        device,
         vocab_src,
         vocab_tgt,
         spacy_de,
@@ -848,11 +696,13 @@ def train_worker(
             train_state=train_state,
         )
 
-        GPUtil.showUtilization()
+        if has_cuda:
+            GPUtil.showUtilization()
         if is_main_process:
             file_path = "%s%.2d.pt" % (config["file_prefix"], epoch)
             torch.save(module.state_dict(), file_path)
-        torch.cuda.empty_cache()
+        if has_cuda:
+            torch.cuda.empty_cache()
 
         print(f"[GPU{gpu}] Epoch {epoch} Validation ====", flush=True)
         model.eval()
@@ -865,7 +715,8 @@ def train_worker(
             mode="eval",
         )
         print(sloss)
-        torch.cuda.empty_cache()
+        if has_cuda:
+            torch.cuda.empty_cache()
 
     if is_main_process:
         file_path = "%sfinal.pt" % config["file_prefix"]
@@ -913,13 +764,6 @@ def load_trained_model():
     model = make_model(len(vocab_src), len(vocab_tgt), N=6)
     model.load_state_dict(torch.load("multi30k_model_final.pt"))
     return model
-
-if is_interactive_notebook() and RUN_EXAMPLES:
-    model = load_trained_model()
-
-if False:
-    model.src_embed[0].lut.weight = model.tgt_embeddings[0].lut.weight
-    model.generator.lut.weight = model.tgt_embed[0].lut.weight
 
 def average(model, models):
     for ps in zip(*[m.params() for m in [model] + models]):
@@ -994,155 +838,4 @@ def run_model_example(n_examples=5):
     )
     return model, example_data
 
-def mtx2df(m, max_row, max_col, row_tokens, col_tokens):
-    return pd.DataFrame(
-        [
-            (
-                r,
-                c,
-                float(m[r, c]),
-                "%.3d %s"
-                % (r, row_tokens[r] if len(row_tokens) > r else "<blank>"),
-                "%.3d %s"
-                % (c, col_tokens[c] if len(col_tokens) > c else "<blank>"),
-            )
-            for r in range(m.shape[0])
-            for c in range(m.shape[1])
-            if r < max_row and c < max_col
-        ],
-
-        columns=["row", "column", "value", "row_token", "col_token"],
-    )
-
-def attn_map(attn, layer, head, row_tokens, col_tokens, max_dim=30):
-    df = mtx2df(
-        attn[0, head].data,
-        max_dim,
-        max_dim,
-        row_tokens,
-        col_tokens,
-    )
-    return (
-        alt.Chart(data=df)
-        .mark_rect()
-        .encode(
-            x=alt.X("col_token", axis=alt.Axis(title="")),
-            y=alt.Y("row_token", axis=alt.Axis(title="")),
-            color="value",
-            tooltip=["row", "column", "value", "row_token", "col_token"],
-        )
-        .properties(height=400, width=400)
-        .interactive()
-    )
-
-def get_encoder(model, layer):
-    return model.encoder.layers[layer].self_attn.attn
-
-def get_decoder_self(model, layer):
-    return model.decoder.layers[layer].self_attn.attn
-
-def get_decoder_src(model, layer):
-    return model.decoder.layers[layer].src_attn.attn
-
-def visualize_layer(model, layer, getter_fn, ntokens, row_tokens, col_tokens):
-
-    attn = getter_fn(model, layer)
-    n_heads = attn.shape[1]
-    charts = [
-        attn_map(
-            attn,
-            0,
-            h,
-            row_tokens=row_tokens,
-            col_tokens=col_tokens,
-            max_dim=ntokens,
-        )
-        for h in range(n_heads)
-    ]
-    assert n_heads == 8
-    return alt.vconcat(
-        charts[0]
-
-        | charts[2]
-
-        | charts[4]
-
-        | charts[6]
-
-    ).properties(title="Layer %d" % (layer + 1))
-
-def viz_encoder_self():
-    model, example_data = run_model_example(n_examples=1)
-    example = example_data[
-        len(example_data) - 1
-    ]
-
-    layer_viz = [
-        visualize_layer(
-            model, layer, get_encoder, len(example[1]), example[1], example[1]
-        )
-        for layer in range(6)
-    ]
-    return alt.hconcat(
-        layer_viz[0]
-
-        & layer_viz[2]
-
-        & layer_viz[4]
-
-    )
-
-show_example(viz_encoder_self)
-
-def viz_decoder_self():
-    model, example_data = run_model_example(n_examples=1)
-    example = example_data[len(example_data) - 1]
-
-    layer_viz = [
-        visualize_layer(
-            model,
-            layer,
-            get_decoder_self,
-            len(example[1]),
-            example[1],
-            example[1],
-        )
-        for layer in range(6)
-    ]
-    return alt.hconcat(
-        layer_viz[0]
-        & layer_viz[1]
-        & layer_viz[2]
-        & layer_viz[3]
-        & layer_viz[4]
-        & layer_viz[5]
-    )
-
-show_example(viz_decoder_self)
-
-def viz_decoder_src():
-    model, example_data = run_model_example(n_examples=1)
-    example = example_data[len(example_data) - 1]
-
-    layer_viz = [
-        visualize_layer(
-            model,
-            layer,
-            get_decoder_src,
-            max(len(example[1]), len(example[2])),
-            example[1],
-            example[2],
-        )
-        for layer in range(6)
-    ]
-    return alt.hconcat(
-        layer_viz[0]
-        & layer_viz[1]
-        & layer_viz[2]
-        & layer_viz[3]
-        & layer_viz[4]
-        & layer_viz[5]
-    )
-
-show_example(viz_decoder_src)
 
