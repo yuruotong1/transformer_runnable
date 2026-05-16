@@ -7,6 +7,7 @@ from transformer_core import (
     load_tokenizers,
     load_vocab,
     create_dataloaders,
+    tokenize,
 )
 
 
@@ -73,6 +74,45 @@ def check_outputs(
     return results
 
 
+def translate(text, model, vocab_src, vocab_tgt, spacy_de, max_len=72, pad_idx=2, eos_string="</s>"):
+    """将一句德语文本翻译成英语，返回翻译结果字符串。"""
+    tokens = ["<s>"] + tokenize(text, spacy_de) + ["</s>"]
+    src_ids = [vocab_src[tok] if tok in vocab_src else vocab_src["<unk>"] for tok in tokens]
+    src = torch.LongTensor(src_ids).unsqueeze(0)
+    src_mask = (src != pad_idx).unsqueeze(-2)
+
+    model_out = greedy_decode(model, src, src_mask, max_len, start_symbol=0)[0]
+    translation = (
+        " ".join([vocab_tgt.get_itos()[x] for x in model_out if x != pad_idx])
+        .split(eos_string, 1)[0]
+        .strip()
+    )
+    return translation
+
+
+def interactive_translate(model_path="multi30k_model_demo.pt"):
+    """交互式翻译循环：持续读取德语输入，输出英语翻译，输入 'quit' 退出。"""
+    print("Loading tokenizers...")
+    spacy_de, spacy_en = load_tokenizers()
+
+    print("Loading vocabulary...")
+    vocab_src, vocab_tgt = load_vocab(spacy_de, spacy_en)
+
+    print("Loading trained model from:", model_path)
+    model = load_trained_model(vocab_src, vocab_tgt, model_path, N=2, d_model=256, d_ff=1024, h=4)
+
+    print("\nTranslator ready (German -> English). Type 'quit' to exit.\n")
+    while True:
+        text = input("Input (DE): ").strip()
+        if not text:
+            continue
+        if text.lower() in ("quit", "exit", "q"):
+            print("Bye!")
+            break
+        result = translate(text, model, vocab_src, vocab_tgt, spacy_de)
+        print(f"Output (EN): {result}\n")
+
+
 def main(model_path="multi30k_model_final.pt", n_examples=5):
     print("Loading tokenizers...")
     spacy_de, spacy_en = load_tokenizers()
@@ -99,5 +139,7 @@ def main(model_path="multi30k_model_final.pt", n_examples=5):
     check_outputs(valid_dataloader, model, vocab_src, vocab_tgt, n_examples=n_examples)
 
 
+
+
 if __name__ == "__main__":
-    main("multi30k_model_demo.pt")
+    interactive_translate("multi30k_model_demo_10.pt")

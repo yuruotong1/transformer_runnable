@@ -78,7 +78,7 @@ def train_demo(vocab_src, vocab_tgt, spacy_de, spacy_en):
     train_dataloader = DataLoader(train_data, batch_size=64, shuffle=True, collate_fn=collate_fn)
     valid_dataloader = DataLoader(valid_data, batch_size=64, shuffle=False, collate_fn=collate_fn)
 
-    num_epochs = 10
+    num_epochs = 15
     for epoch in range(num_epochs):
         model.train()
         train_state = TrainState()
