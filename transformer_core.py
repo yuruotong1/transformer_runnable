@@ -396,21 +396,6 @@ class SimpleLossCompute:
         )
         return sloss.data * norm, sloss
 
-def greedy_decode(model, src, src_mask, max_len, start_symbol):
-    memory = model.encode(src, src_mask)
-    ys = torch.zeros(1, 1).fill_(start_symbol).type_as(src.data)
-    for i in range(max_len - 1):
-        out = model.decode(
-            memory, src_mask, ys, subsequent_mask(ys.size(1)).type_as(src.data)
-        )
-        prob = model.generator(out[:, -1])
-        _, next_word = torch.max(prob, dim=1)
-        next_word = next_word.data[0]
-        ys = torch.cat(
-            [ys, torch.zeros(1, 1).type_as(src.data).fill_(next_word)], dim=1
-        )
-    return ys
-
 def load_tokenizers():
 
     try:
@@ -746,96 +731,5 @@ def train_model(vocab_src, vocab_tgt, spacy_de, spacy_en, config):
             0, 1, vocab_src, vocab_tgt, spacy_de, spacy_en, config, False
         )
 
-def load_trained_model():
-    config = {
-        "batch_size": 32,
-        "distributed": False,
-        "num_epochs": 8,
-        "accum_iter": 10,
-        "base_lr": 1.0,
-        "max_padding": 72,
-        "warmup": 3000,
-        "file_prefix": "multi30k_model_",
-    }
-    model_path = "multi30k_model_final.pt"
-    if not exists(model_path):
-        train_model(vocab_src, vocab_tgt, spacy_de, spacy_en, config)
-
-    model = make_model(len(vocab_src), len(vocab_tgt), N=6)
-    model.load_state_dict(torch.load("multi30k_model_final.pt"))
-    return model
-
-def average(model, models):
-    for ps in zip(*[m.params() for m in [model] + models]):
-        ps[0].copy_(torch.sum(*ps[1:]) / len(ps[1:]))
-
-def check_outputs(
-    valid_dataloader,
-    model,
-    vocab_src,
-    vocab_tgt,
-    n_examples=15,
-    pad_idx=2,
-    eos_string="</s>",
-):
-    results = [()] * n_examples
-    for idx in range(n_examples):
-        print("\nExample %d ========\n" % idx)
-        b = next(iter(valid_dataloader))
-        rb = Batch(b[0], b[1], pad_idx)
-        greedy_decode(model, rb.src, rb.src_mask, 64, 0)[0]
-
-        src_tokens = [
-            vocab_src.get_itos()[x] for x in rb.src[0] if x != pad_idx
-        ]
-        tgt_tokens = [
-            vocab_tgt.get_itos()[x] for x in rb.tgt[0] if x != pad_idx
-        ]
-
-        print(
-            "Source Text (Input)        : "
-            + " ".join(src_tokens).replace("\n", "")
-        )
-        print(
-            "Target Text (Ground Truth) : "
-            + " ".join(tgt_tokens).replace("\n", "")
-        )
-        model_out = greedy_decode(model, rb.src, rb.src_mask, 72, 0)[0]
-        model_txt = (
-            " ".join(
-                [vocab_tgt.get_itos()[x] for x in model_out if x != pad_idx]
-            ).split(eos_string, 1)[0]
-            + eos_string
-        )
-        print("Model Output               : " + model_txt.replace("\n", ""))
-        results[idx] = (rb, src_tokens, tgt_tokens, model_out, model_txt)
-    return results
-
-def run_model_example(n_examples=5):
-    global vocab_src, vocab_tgt, spacy_de, spacy_en
-
-    print("Preparing Data ...")
-    _, valid_dataloader = create_dataloaders(
-        torch.device("cpu"),
-        vocab_src,
-        vocab_tgt,
-        spacy_de,
-        spacy_en,
-        batch_size=1,
-        is_distributed=False,
-    )
-
-    print("Loading Trained Model ...")
-
-    model = make_model(len(vocab_src), len(vocab_tgt), N=6)
-    model.load_state_dict(
-        torch.load("multi30k_model_final.pt", map_location=torch.device("cpu"))
-    )
-
-    print("Checking Model Outputs:")
-    example_data = check_outputs(
-        valid_dataloader, model, vocab_src, vocab_tgt, n_examples=n_examples
-    )
-    return model, example_data
 
 

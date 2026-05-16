@@ -70,19 +70,15 @@ def train_demo(vocab_src, vocab_tgt, spacy_de, spacy_en):
             device, max_padding=32, pad_id=vocab_src.get_stoi()["<blank>"],
         )
 
-    try:
-        train_iter, valid_iter, _ = datasets.Multi30k(language_pair=("de", "en"))
-        train_data = list(train_iter)[:3000]
-        valid_data = list(valid_iter)[:500]
-    except Exception:
-        train_data, valid_data = load_multi30k_raw()
-        train_data = train_data[:3000]
-        valid_data = valid_data[:500]
-
+    
+    train_iter, valid_iter, _ = datasets.Multi30k(language_pair=("de", "en"))
+    train_data = list(train_iter)[:3000]
+    valid_data = list(valid_iter)[:500]
+  
     train_dataloader = DataLoader(train_data, batch_size=64, shuffle=True, collate_fn=collate_fn)
     valid_dataloader = DataLoader(valid_data, batch_size=64, shuffle=False, collate_fn=collate_fn)
 
-    num_epochs = 3
+    num_epochs = 10
     for epoch in range(num_epochs):
         model.train()
         train_state = TrainState()
