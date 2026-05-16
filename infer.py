@@ -142,4 +142,4 @@ def main(model_path="multi30k_model_final.pt", n_examples=5):
 
 
 if __name__ == "__main__":
-    interactive_translate("multi30k_model_demo_10.pt")
+    interactive_translate("multi30k_model_demo_3.pt")
