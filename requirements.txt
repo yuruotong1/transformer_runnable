@@ -3,6 +3,7 @@ pandas>=2.0
 torch>=2.3,<2.4
 torchdata==0.7.1
 torchtext==0.18.0
+portalocker>=2.0.0
 spacy>=3.7
 altair>=5.0
 jupytext>=1.16

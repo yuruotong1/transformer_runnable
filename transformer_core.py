@@ -723,7 +723,7 @@ def train_worker(
         torch.save(module.state_dict(), file_path)
 
 def train_distributed_model(vocab_src, vocab_tgt, spacy_de, spacy_en, config):
-    from the_annotated_transformer import train_worker
+    from transformer_core import train_worker
 
     ngpus = torch.cuda.device_count()
     os.environ["MASTER_ADDR"] = "localhost"
